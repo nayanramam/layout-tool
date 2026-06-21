@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { createJSONStorage, persist } from 'zustand/middleware';
 import type {
   DeviceType,
   DRCViolation,
@@ -20,9 +21,11 @@ import { runHints } from '../engine/hints';
 import { downloadGds } from '../engine/gds/writer';
 import { importGdsFile } from '../engine/gds/reader';
 import {
+  expandSelectionShapeIds,
+  boundsForZoomFit,
   cloneLayout,
   collectRegionSelection,
-  computeLayoutBounds,
+  DEFAULT_VIEW,
   pickTopShapeAtPoint,
   pickWireAtPoint,
   zoomToFitView,
@@ -141,14 +144,16 @@ function collectDeviceShapeIds(layout: Layout, deviceId: string): string[] {
   return layout.shapes.filter((shape) => shape.deviceId === deviceId).map((shape) => shape.id);
 }
 
-export const useLayoutStore = create<LayoutStore>((set, get) => ({
+export const useLayoutStore = create<LayoutStore>()(
+  persist(
+    (set, get) => ({
   layout: emptyLayout(),
   netlist: null,
   activeLayer: 'm1',
   layerVisibility: defaultLayerVisibility(),
   tool: 'select',
   instanceDeviceType: 'nmos',
-  view: { panX: 120, panY: 120, zoom: 120 },
+  view: { ...DEFAULT_VIEW },
   selectedShapeIds: [],
   selectedWireIds: [],
   draft: {},
@@ -188,7 +193,11 @@ export const useLayoutStore = create<LayoutStore>((set, get) => ({
   setView: (partial) => set((state) => ({ view: { ...state.view, ...partial } })),
 
   zoomToFit: (viewportWidth, viewportHeight) => {
-    const bounds = computeLayoutBounds(get().layout);
+    const bounds = boundsForZoomFit(get().layout);
+    if (!bounds) {
+      set({ view: { ...DEFAULT_VIEW } });
+      return;
+    }
     const view = zoomToFitView(bounds, viewportWidth, viewportHeight);
     set({ view });
   },
@@ -348,7 +357,7 @@ export const useLayoutStore = create<LayoutStore>((set, get) => ({
   },
 
   moveSelected: (dx, dy) => {
-    const shapeIds = new Set(get().selectedShapeIds);
+    const shapeIds = expandSelectionShapeIds(get().layout, get().selectedShapeIds);
     const wireIds = new Set(get().selectedWireIds);
     if (shapeIds.size === 0 && wireIds.size === 0) return;
     set((state) => {
@@ -363,11 +372,14 @@ export const useLayoutStore = create<LayoutStore>((set, get) => ({
           },
         };
       });
+      const movedDeviceIds = new Set<string>();
+      for (const shape of state.layout.shapes) {
+        if (shape.deviceId && shapeIds.has(shape.id)) {
+          movedDeviceIds.add(shape.deviceId);
+        }
+      }
       const devices = state.layout.devices.map((device) => {
-        const owned = state.layout.shapes.some(
-          (shape) => shape.deviceId === device.id && shapeIds.has(shape.id),
-        );
-        if (!owned) return device;
+        if (!movedDeviceIds.has(device.id)) return device;
         return {
           ...device,
           origin: { x: device.origin.x + dx, y: device.origin.y + dy },
@@ -464,7 +476,27 @@ export const useLayoutStore = create<LayoutStore>((set, get) => ({
 
   getFilteredLvsItems: () =>
     filterLVSItems(get().lvsItems, get().lvsKindFilter, get().lvsStatusFilter),
-}));
+}),
+    {
+      name: 'layout-tool-v1',
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({
+        layout: state.layout,
+        netlist: state.netlist,
+        view: state.view,
+        layerVisibility: state.layerVisibility,
+        activeLayer: state.activeLayer,
+      }),
+      onRehydrateStorage: () => (state, error) => {
+        if (!error && state) {
+          queueMicrotask(() => {
+            useLayoutStore.setState(recompute(useLayoutStore.getState()));
+          });
+        }
+      },
+    },
+  ),
+);
 
 export function commitDraftRect(): void {
   const state = useLayoutStore.getState();

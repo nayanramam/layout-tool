@@ -1,10 +1,13 @@
 .app-shell {
-  min-height: 100vh;
+  height: 100%;
+  max-height: 100dvh;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .app-header {
+  flex-shrink: 0;
   padding: 0.75rem 1rem;
   border-bottom: 1px solid #24313a;
   background: #12181d;
@@ -22,6 +25,7 @@
 }
 
 .toolbar {
+  flex-shrink: 0;
   display: flex;
   justify-content: space-between;
   gap: 0.75rem;
@@ -52,13 +56,16 @@
 
 .workspace {
   flex: 1;
-  display: grid;
-  grid-template-columns: 260px 1fr 320px;
   min-height: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr) 320px;
 }
 
 .sidebar {
-  overflow: auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
   border-color: #24313a;
   background: #12181d;
   padding: 0.5rem;
@@ -75,21 +82,22 @@
 .canvas-wrap {
   position: relative;
   min-height: 0;
+  min-width: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
-  min-width: 0;
 }
 
 .layout-canvas-wrap {
   position: relative;
   flex: 1;
-  min-height: 480px;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .layout-canvas {
-  width: 100%;
-  height: 100%;
-  min-height: 480px;
+  position: absolute;
+  inset: 0;
   outline: none;
 }
 
@@ -176,11 +184,12 @@
 
 .layout-canvas canvas {
   display: block;
-  width: 100%;
-  height: 100%;
+  width: 100% !important;
+  height: 100% !important;
 }
 
 .canvas-help {
+  flex-shrink: 0;
   padding: 0.35rem 0.6rem;
   font-size: 0.75rem;
   color: #8fa0ab;
@@ -266,8 +275,6 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 220px;
-  overflow: auto;
 }
 
 .issue-list li {
@@ -303,6 +310,56 @@
 
 .issue.hint strong {
   color: #80deea;
+}
+
+.drc-item {
+  position: relative;
+  cursor: help;
+}
+
+.drc-item.hovered {
+  background: rgba(255, 82, 82, 0.08);
+}
+
+.drc-help-tooltip {
+  margin-top: 0.45rem;
+  padding: 0.55rem 0.65rem;
+  background: #1a242c;
+  border: 1px solid #ff8a80;
+  border-radius: 6px;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: #cfd8dc;
+}
+
+.drc-help-explanation {
+  margin: 0 0 0.4rem;
+}
+
+.drc-help-suggestion {
+  margin: 0;
+  color: #a5d6a7;
+}
+
+.drc-help-suggestion strong {
+  color: #c8e6c9;
+}
+
+.canvas-drc-tooltip {
+  position: absolute;
+  z-index: 20;
+  margin: 0;
+  max-width: min(320px, calc(100% - 24px));
+  pointer-events: none;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+}
+
+.drc-help-rule {
+  margin: 0 0 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #ff8a80;
+  text-transform: lowercase;
 }
 
 .filter-row {
@@ -343,13 +400,25 @@
 }
 
 @media (max-width: 1100px) {
+  html,
+  body,
+  #root,
+  .app-shell {
+    overflow: auto;
+    height: auto;
+    min-height: 100dvh;
+  }
+
   .workspace {
     grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(280px, 40vh) auto;
+    overflow: visible;
   }
 
   .sidebar.left,
   .sidebar.right {
     border: none;
     border-top: 1px solid #24313a;
+    max-height: 40vh;
   }
 }

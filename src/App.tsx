@@ -14,7 +14,11 @@ function App() {
   const refreshDerived = useLayoutStore((s) => s.refreshDerived);
 
   useEffect(() => {
-    refreshDerived();
+    const finishHydration = () => refreshDerived();
+    if (useLayoutStore.persist.hasHydrated()) {
+      finishHydration();
+    }
+    return useLayoutStore.persist.onFinishHydration(finishHydration);
   }, [refreshDerived]);
 
   return (

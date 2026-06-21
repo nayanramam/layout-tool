@@ -29,8 +29,8 @@ export function Toolbar() {
   const drcCount = useLayoutStore((s) => s.drcViolations.length);
 
   const handleFit = () => {
-    const canvas = document.querySelector('.layout-canvas');
-    const rect = canvas?.getBoundingClientRect();
+    const wrap = document.querySelector('.layout-canvas-wrap');
+    const rect = wrap?.getBoundingClientRect();
     zoomToFit(rect?.width ?? 800, rect?.height ?? 600);
   };
 

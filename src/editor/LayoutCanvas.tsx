@@ -8,7 +8,9 @@ import {
   useLayoutStore,
 } from '../store/layoutStore';
 import { rectFromPoints, screenToWorld, snapPoint } from '../engine/geometry';
-import { hasHitAtPoint } from '../engine/geometry/view';
+import { hitDrcViolation } from '../engine/drc/explanations';
+import { hasHitAtPoint, hitIsInCurrentSelection } from '../engine/geometry/view';
+import { DrcHelpContent } from './DrcHelpTooltip';
 import { toolCursorClass } from './toolCursors';
 
 const BG = 0x101418;
@@ -23,6 +25,7 @@ function drawScene(
   view: { panX: number; panY: number; zoom: number },
   state: ReturnType<typeof useLayoutStore.getState>,
   marquee?: { start: { x: number; y: number }; current: { x: number; y: number } } | null,
+  hoveredDrcId?: string | null,
 ): void {
   world.removeChildren();
   world.position.set(view.panX, view.panY);
@@ -124,7 +127,15 @@ function drawScene(
   for (const violation of drcViolations) {
     const g = new Graphics();
     g.rect(violation.bbox.x, violation.bbox.y, violation.bbox.width, violation.bbox.height);
-    g.stroke({ color: 0xff5252, width: 2 / view.zoom, alpha: 0.95 });
+    const hovered = violation.id === hoveredDrcId;
+    g.stroke({
+      color: hovered ? 0xffeb3b : 0xff5252,
+      width: (hovered ? 3 : 2) / view.zoom,
+      alpha: 0.95,
+    });
+    if (hovered) {
+      g.fill({ color: 0xff5252, alpha: 0.15 });
+    }
     world.addChild(g);
   }
 
@@ -169,6 +180,7 @@ type SelectDragState =
   | { kind: 'move'; last: { x: number; y: number } };
 
 export function LayoutCanvas() {
+  const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const appRef = useRef<Application | null>(null);
   const worldRef = useRef<Container | null>(null);
@@ -180,6 +192,11 @@ export function LayoutCanvas() {
   const [pixiReady, setPixiReady] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
   const [marquee, setMarquee] = useState<{ start: { x: number; y: number }; current: { x: number; y: number } } | null>(null);
+  const [canvasDrcHover, setCanvasDrcHover] = useState<{
+    violationId: string;
+    screenX: number;
+    screenY: number;
+  } | null>(null);
 
   const layout = useLayoutStore((s) => s.layout);
   const layerVisibility = useLayoutStore((s) => s.layerVisibility);
@@ -261,7 +278,7 @@ export function LayoutCanvas() {
     if (!pixiReady) return;
     const world = worldRef.current;
     if (!world) return;
-    drawScene(world, view, useLayoutStore.getState(), marquee);
+    drawScene(world, view, useLayoutStore.getState(), marquee, canvasDrcHover?.violationId ?? null);
   }, [
     pixiReady,
     layout,
@@ -275,6 +292,7 @@ export function LayoutCanvas() {
     terminalHighlights,
     tool,
     marquee,
+    canvasDrcHover?.violationId,
   ]);
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -299,13 +317,21 @@ export function LayoutCanvas() {
 
     if (tool === 'select') {
       const hadHit = hasHitAtPoint(store.layout, snapped);
+      const keepSelection =
+        hadHit &&
+        hitIsInCurrentSelection(
+          store.layout,
+          snapped,
+          store.selectedShapeIds,
+          store.selectedWireIds,
+        );
       selectDragRef.current = {
         kind: 'pending',
         start: snapped,
         screenStart: { x: screenX, y: screenY },
         hadHit,
       };
-      if (hadHit) {
+      if (hadHit && !keepSelection) {
         store.selectAtPoint(snapped);
       }
       moveUndoPushedRef.current = false;
@@ -373,6 +399,15 @@ export function LayoutCanvas() {
     const snapped = snapPoint(worldPoint, gridSnap);
     const store = useLayoutStore.getState();
 
+    if (!draggingRef.current && selectDragRef.current === null && !isDrawingRef.current) {
+      const hit = hitDrcViolation(worldPoint, store.drcViolations, view.zoom);
+      if (hit) {
+        setCanvasDrcHover({ violationId: hit.id, screenX, screenY });
+      } else {
+        setCanvasDrcHover(null);
+      }
+    }
+
     if (isDrawingRef.current && tool === 'rect') {
       store.setDraftCurrent(snapped);
       return;
@@ -432,6 +467,7 @@ export function LayoutCanvas() {
     draggingRef.current = null;
     selectDragRef.current = null;
     setMarquee(null);
+    setCanvasDrcHover(null);
     moveUndoPushedRef.current = false;
     if (isDrawingRef.current && tool === 'rect') {
       commitDraftRect();
@@ -446,21 +482,35 @@ export function LayoutCanvas() {
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    const rect = canvasRef.current?.getBoundingClientRect();
+    const rect = wrapRef.current?.getBoundingClientRect();
     handleCanvasShortcut(event.nativeEvent, {
       width: rect?.width ?? 800,
       height: rect?.height ?? 600,
     });
   };
 
+  const hoveredCanvasViolation = canvasDrcHover
+    ? drcViolations.find((violation) => violation.id === canvasDrcHover.violationId)
+    : null;
+
   return (
-    <div className="layout-canvas-wrap">
+    <div ref={wrapRef} className="layout-canvas-wrap">
       {initError ? (
         <div className="canvas-error">
           Canvas failed to start: {initError}. Try a normal browser tab (Chrome/Edge/Firefox).
         </div>
       ) : null}
       {!pixiReady && !initError ? <div className="canvas-loading">Loading canvas…</div> : null}
+      {hoveredCanvasViolation && canvasDrcHover ? (
+        <div
+          className="drc-help-tooltip canvas-drc-tooltip"
+          style={{ left: canvasDrcHover.screenX + 12, top: canvasDrcHover.screenY + 12 }}
+          role="tooltip"
+        >
+          <p className="drc-help-rule">{hoveredCanvasViolation.ruleId}</p>
+          <DrcHelpContent violation={hoveredCanvasViolation} />
+        </div>
+      ) : null}
       <div
         ref={canvasRef}
         className={`layout-canvas ${toolCursorClass(tool)}`}
@@ -468,7 +518,10 @@ export function LayoutCanvas() {
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        onPointerLeave={handlePointerUp}
+        onPointerLeave={() => {
+          handlePointerUp();
+          setCanvasDrcHover(null);
+        }}
         onDoubleClick={handleDoubleClick}
         onKeyDown={handleKeyDown}
       />

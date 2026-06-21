@@ -1,8 +1,24 @@
 import type { Layout, Point, Rect, Shape, Wire } from '../../types';
 import { LAYER_ORDER } from '../../pdk/sky130';
-import { shapeBBox } from './index';
+import { expandRect, shapeBBox } from './index';
 
 const EMPTY_BOUNDS: Rect = { x: -2, y: -2, width: 4, height: 4 };
+
+function wireBBox(wire: Wire): Rect | null {
+  if (wire.points.length === 0) return null;
+  const xs = wire.points.map((p) => p.x);
+  const ys = wire.points.map((p) => p.y);
+  const half = wire.width / 2 + 0.02;
+  const minX = Math.min(...xs) - half;
+  const minY = Math.min(...ys) - half;
+  const maxX = Math.max(...xs) + half;
+  const maxY = Math.max(...ys) + half;
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+
+export function layoutHasContent(layout: Layout): boolean {
+  return layout.shapes.length > 0 || layout.wires.length > 0 || layout.devices.length > 0;
+}
 
 export function computeLayoutBounds(layout: Layout): Rect {
   const boxes: Rect[] = [];
@@ -12,15 +28,14 @@ export function computeLayoutBounds(layout: Layout): Rect {
   }
 
   for (const wire of layout.wires) {
-    if (wire.points.length === 0) continue;
-    const xs = wire.points.map((p) => p.x);
-    const ys = wire.points.map((p) => p.y);
-    boxes.push({
-      x: Math.min(...xs),
-      y: Math.min(...ys),
-      width: Math.max(...xs) - Math.min(...xs),
-      height: Math.max(...ys) - Math.min(...ys),
-    });
+    const box = wireBBox(wire);
+    if (box) boxes.push(box);
+  }
+
+  for (const device of layout.devices) {
+    for (const point of Object.values(device.terminals)) {
+      boxes.push({ x: point.x - 0.06, y: point.y - 0.06, width: 0.12, height: 0.12 });
+    }
   }
 
   if (boxes.length === 0) {
@@ -35,22 +50,33 @@ export function computeLayoutBounds(layout: Layout): Rect {
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
 
+/** Bounds with generous margin for zoom-to-fit (Cadence-style fit all). */
+export function boundsForZoomFit(layout: Layout): Rect | null {
+  if (!layoutHasContent(layout)) return null;
+
+  const raw = computeLayoutBounds(layout);
+  const margin = Math.max(1.0, raw.width * 0.25, raw.height * 0.25);
+  return expandRect(raw, margin);
+}
+
 export function zoomToFitView(
   bounds: Rect,
   viewportWidth: number,
   viewportHeight: number,
-  padding = 40,
+  paddingPx = 48,
 ): { panX: number; panY: number; zoom: number } {
   if (viewportWidth <= 0 || viewportHeight <= 0) {
     return { panX: 120, panY: 120, zoom: 120 };
   }
 
-  const contentWidth = Math.max(bounds.width, 0.5);
-  const contentHeight = Math.max(bounds.height, 0.5);
-  const availableWidth = Math.max(viewportWidth - padding * 2, 1);
-  const availableHeight = Math.max(viewportHeight - padding * 2, 1);
+  const contentWidth = Math.max(bounds.width, 0.05);
+  const contentHeight = Math.max(bounds.height, 0.05);
+  const availableWidth = Math.max(viewportWidth - paddingPx * 2, 1);
+  const availableHeight = Math.max(viewportHeight - paddingPx * 2, 1);
 
-  const zoom = Math.min(800, Math.max(20, Math.min(availableWidth / contentWidth, availableHeight / contentHeight)));
+  const fitZoom = Math.min(availableWidth / contentWidth, availableHeight / contentHeight);
+  const zoom = Math.min(400, Math.max(8, fitZoom));
+
   const centerX = bounds.x + bounds.width / 2;
   const centerY = bounds.y + bounds.height / 2;
 
@@ -60,6 +86,8 @@ export function zoomToFitView(
     panY: viewportHeight / 2 - centerY * zoom,
   };
 }
+
+export const DEFAULT_VIEW = { panX: 120, panY: 120, zoom: 120 };
 
 export function layerDrawPriority(layer: Shape['layer']): number {
   return LAYER_ORDER.indexOf(layer);
@@ -173,6 +201,50 @@ export function collectRegionSelection(
     .map((wire) => wire.id);
 
   return { shapeIds: [...shapeIds], wireIds };
+}
+
+export function hitIsInCurrentSelection(
+  layout: Layout,
+  point: Point,
+  selectedShapeIds: string[],
+  selectedWireIds: string[],
+): boolean {
+  if (selectedShapeIds.length === 0 && selectedWireIds.length === 0) return false;
+
+  const shapeIds = new Set(selectedShapeIds);
+  const wireIds = new Set(selectedWireIds);
+
+  const hit = pickTopShapeAtPoint(layout.shapes, point);
+  if (hit) {
+    if (shapeIds.has(hit.id)) return true;
+    if (hit.deviceId) {
+      return layout.shapes
+        .filter((shape) => shape.deviceId === hit.deviceId)
+        .some((shape) => shapeIds.has(shape.id));
+    }
+    return false;
+  }
+
+  const wire = pickWireAtPoint(layout.wires, point);
+  return wire !== null && wireIds.has(wire.id);
+}
+
+export function expandSelectionShapeIds(layout: Layout, selectedShapeIds: string[]): Set<string> {
+  const shapeIds = new Set(selectedShapeIds);
+  const deviceIds = new Set<string>();
+
+  for (const id of shapeIds) {
+    const shape = layout.shapes.find((entry) => entry.id === id);
+    if (shape?.deviceId) deviceIds.add(shape.deviceId);
+  }
+
+  for (const shape of layout.shapes) {
+    if (shape.deviceId && deviceIds.has(shape.deviceId)) {
+      shapeIds.add(shape.id);
+    }
+  }
+
+  return shapeIds;
 }
 
 export function cloneLayout(layout: Layout): Layout {
